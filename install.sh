@@ -80,7 +80,7 @@ if "PreInvocation" not in data["bash-guard"] or not isinstance(data["bash-guard"
 hook_entry = {
     "type": "command",
     "command": script_path,
-    "timeout": 30
+    "timeout": 86400
 }
 
 # Safely update existing entry or append
