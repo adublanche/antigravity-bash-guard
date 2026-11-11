@@ -36,28 +36,18 @@ Without a guard, this triggers a round-trip to the model, wasting time, tokens, 
 
 1. It inspects the prompt payload (`lastUserInput`).
 2. It detects common local shell commands (with optional `sudo`), such as `git`, `systemctl`, `docker`, `npm`, `apt`, `ls`, etc.
-3. If detected, it displays an interactive selection menu directly in your terminal:
+3. If detected, it **instantly stops the invocation** (0ms latency, 0 AI tokens spent) and reminds you to prepend `!`:
    ```text
-   [Antigravity Bash Guard] Detected terminal command: 'git'
-   ? How would you like to handle this input? (↑/↓ arrows, Enter to select, Esc to cancel)
-     ❯ CMD Command    (Cancel prompt & run in shell with '!git status')
-       AI Prompt      (Send to Antigravity as a conversational prompt)
-       Cancel         (Abort and do nothing (Esc))
+   Accidental terminal command detected ('git'). Antigravity CLI requires shell commands to be prefixed with '!' (e.g. '!git status'). Prompt blocked to avoid wasting AI tokens.
    ```
-4. **Interactive Controls**:
-   - **`↑` / `↓` Arrow Keys** (or `k` / `j`): Navigate options
-   - **`Enter`**: Confirm highlighted selection
-   - **`Esc`**: Abort and return to prompt without sending anything to the model
-   - Quick shortcuts: Press `1`, `2`, `3`, `c`, or `p` for instant selection
+4. If it's a normal prompt (or already prefixed with `!`), it passes through immediately without interference.
 
 ```mermaid
 flowchart TD
     A[User enters prompt] --> B{Starts with terminal command?}
     B -- "No / Prefixed with '!'" --> C["Allow (terminationBehavior: '')"] --> D[Proceed to Model / Shell Execution]
-    B -- "Yes (e.g., 'git status')" --> E["Interactive Menu (↑/↓, Enter, Esc)"]
-    E -- "AI Prompt [2 / p]" --> C
-    E -- "CMD Command [1 / c]" --> F["Cancel (terminationBehavior: 'terminate')"] --> G["Remind: Run '!<cmd>'"]
-    E -- "Cancel [3 / Esc]" --> H["Abort Turn cleanly"]
+    B -- "Yes (e.g., 'git status')" --> E["Instant Hard Guard (0ms, 0 tokens)"]
+    E --> F["Block turn & remind: '!<prompt>'"]
 ```
 
 ---
