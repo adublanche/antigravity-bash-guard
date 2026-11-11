@@ -1,84 +1,164 @@
-#!/usr/bin/env bash
-# -----------------------------------------------------------------------------
-# check_command.sh - Antigravity CLI PreInvocation Hook
-# Intercepts conversational prompts and guards against accidental local terminal
-# command execution when the '!' prefix is omitted.
-# -----------------------------------------------------------------------------
-set -euo pipefail
+#!/usr/bin/env python3
+"""
+Antigravity CLI PreInvocation Hook - Bash Guard
+Intercepts conversational prompts, checks for common shell commands, and
+presents an interactive terminal dialog (arrow keys, Enter, Escape) to clarify intent.
+"""
+import sys
+import json
+import os
+import re
+import termios
+import tty
+import select
 
-# Read stdin JSON payload delivered by Antigravity PreInvocation hook
-PAYLOAD=$(cat)
+CMD_REGEX = re.compile(
+    r'^\s*(sudo\s+)?(ls|cd|pwd|grep|find|cat|npm|npx|pnpm|yarn|git|python|python3|docker|docker-compose|agy|systemctl|service|journalctl|apt|apt-get|yum|dnf|pacman|curl|wget|ssh|scp|rsync|ping|netstat|ss|ip|ifconfig|kill|killall|ps|top|htop|df|du|free|chmod|chown|mkdir|rmdir|rm|cp|mv|touch|tar|zip|unzip|nano|vim|vi|echo|export|source)(\s+.*|$)',
+    re.IGNORECASE
+)
 
-# Extract "prompt" / "lastUserInput" string using python3 (with fallback to jq or regex)
-PROMPT=""
-if command -v python3 >/dev/null 2>&1; then
-    PROMPT=$(python3 -c "
-import sys, json
-try:
-    data = json.loads(sys.argv[1])
-    # Antigravity hook payload delivers 'lastUserInput' (with 'prompt' fallback)
-    p = data.get('lastUserInput')
-    if not p:
-        p = data.get('prompt', '')
-    print(p if p is not None else '')
-except Exception:
-    print('')
-" "$PAYLOAD")
-elif command -v jq >/dev/null 2>&1; then
-    PROMPT=$(echo "$PAYLOAD" | jq -r '.lastUserInput // .prompt // empty')
-else
-    PROMPT=$(echo "$PAYLOAD" | sed -n 's/.*"lastUserInput"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
-    if [[ -z "$PROMPT" ]]; then
-        PROMPT=$(echo "$PAYLOAD" | sed -n 's/.*"prompt"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
-    fi
-fi
+def output_allow():
+    """Allow the invocation to proceed to the model."""
+    sys.stdout.write(json.dumps({"terminationBehavior": ""}) + "\n")
+    sys.stdout.flush()
+    sys.exit(0)
 
-# Regex matching common terminal commands (with optional sudo) at start of prompt
-CMD_REGEX="^[[:space:]]*(sudo[[:space:]]+)?(ls|cd|pwd|grep|find|cat|npm|npx|pnpm|yarn|git|python|python3|docker|docker-compose|agy|systemctl|service|journalctl|apt|apt-get|yum|dnf|pacman|curl|wget|ssh|scp|rsync|ping|netstat|ss|ip|ifconfig|kill|killall|ps|top|htop|df|du|free|chmod|chown|mkdir|rmdir|rm|cp|mv|touch|tar|zip|unzip|nano|vim|vi|echo|export|source)([[:space:]]|$)"
-
-if [[ "$PROMPT" =~ $CMD_REGEX ]]; then
-    MATCHED_CMD="${BASH_REMATCH[1]}${BASH_REMATCH[2]}"
-    
-    # Check if an interactive TTY is available to ask the user
-    if exec 3< /dev/tty 3> /dev/tty 2>/dev/null; then
-        printf "\n\033[1;33m[Antigravity Bash Guard]\033[0m Detected command: '\033[1m%s\033[0m'\n" "$MATCHED_CMD" >&3
-        printf "Do you mean it as a prompt or as a cmd command?\n" >&3
-        printf "  [p] Prompt      (send to Antigravity AI)\n" >&3
-        printf "  [c] CMD command (cancel & prepend with '!')\n" >&3
-        printf "Choose [p/C]: " >&3
-        
-        CHOICE=""
-        read -r CHOICE <&3 || CHOICE="c"
-        exec 3<&- 3>&-
-        CHOICE=$(echo "$CHOICE" | tr -d '\r' | tr '[:upper:]' '[:lower:]' | xargs)
-        
-        if [[ "$CHOICE" == "p" || "$CHOICE" == "prompt" ]]; then
-            cat << EOF_JSON
-{
-  "terminationBehavior": ""
-}
-EOF_JSON
-            exit 0
-        fi
-    fi
-
-    # If chosen 'c' or non-interactive fallback: block and remind to use '!'
-    cat << EOF_JSON
-{
-  "terminationBehavior": "terminate",
-  "injectSteps": [
-    {
-      "errorMessage": {
-        "userMessage": "Command cancelled. Prefix with '!' (e.g., '!${PROMPT}') to execute directly in your shell."
-      }
+def output_terminate(message):
+    """Halt the invocation and display a notice to the user."""
+    result = {
+        "terminationBehavior": "terminate",
+        "injectSteps": [
+            {
+                "errorMessage": {
+                    "userMessage": message
+                }
+            }
+        ]
     }
-  ]
-}
-EOF_JSON
-else
-    cat << EOF_JSON
-{
-  "terminationBehavior": ""
-}
-EOF_JSON
-fi
+    sys.stdout.write(json.dumps(result) + "\n")
+    sys.stdout.flush()
+    sys.exit(0)
+
+def show_interactive_menu(cmd_name, full_prompt):
+    """Presents an interactive selector on /dev/tty matching CLI style."""
+    try:
+        tty_fd = os.open('/dev/tty', os.O_RDWR)
+    except Exception:
+        # Non-interactive fallback
+        output_terminate(
+            f"Accidental terminal command detected ('{cmd_name}'). "
+            f"Prefix with '!' (e.g., '!{full_prompt}') to execute directly in your shell."
+        )
+
+    old_settings = termios.tcgetattr(tty_fd)
+    tty_out = os.fdopen(tty_fd, 'w', encoding='utf-8', buffering=1)
+    tty_in = os.fdopen(tty_fd, 'r', encoding='utf-8')
+
+    options = [
+        ("CMD Command", f"Cancel prompt & run in shell with '!{full_prompt}'", "cmd"),
+        ("AI Prompt", "Send to Antigravity as a conversational prompt", "prompt"),
+        ("Cancel", "Abort and do nothing (Esc)", "cancel")
+    ]
+    selected = 0
+
+    def render(first=False):
+        if not first:
+            tty_out.write(f"\033[{len(options)}A")
+        for i, (label, desc, _) in enumerate(options):
+            tty_out.write("\033[2K\r")
+            if i == selected:
+                tty_out.write(f"  \033[1;36m❯ {label:<14}\033[0m \033[90m({desc})\033[0m\n")
+            else:
+                tty_out.write(f"    {label:<14} \033[90m({desc})\033[0m\n")
+        tty_out.flush()
+
+    try:
+        tty.setcbreak(tty_fd)
+
+        # Header display
+        tty_out.write("\n\033[1;33m[Antigravity Bash Guard]\033[0m ")
+        tty_out.write(f"Detected terminal command: '\033[1;37m{cmd_name}\033[0m'\n")
+        tty_out.write("\033[1m? How would you like to handle this input?\033[0m \033[90m(↑/↓ arrows, Enter to select, Esc to cancel)\033[0m\n")
+        render(first=True)
+
+        while True:
+            ch = tty_in.read(1)
+            if ch == '\x1b':  # Escape sequence or Esc
+                r, _, _ = select.select([tty_fd], [], [], 0.05)
+                if r:
+                    seq = tty_in.read(2)
+                    if seq in ('[A', 'OA'):  # Up Arrow
+                        selected = (selected - 1) % len(options)
+                        render()
+                    elif seq in ('[B', 'OB'):  # Down Arrow
+                        selected = (selected + 1) % len(options)
+                        render()
+                else:
+                    # Bare Esc key pressed -> cancel
+                    tty_out.write("\033[90m[Cancelled]\033[0m\n")
+                    tty_out.flush()
+                    return "cancel"
+            elif ch in ('\r', '\n'):  # Enter
+                action = options[selected][2]
+                tty_out.write(f"\033[90mSelected: {options[selected][0]}\033[0m\n")
+                tty_out.flush()
+                return action
+            elif ch in ('k', 'K'):  # Vim Up
+                selected = (selected - 1) % len(options)
+                render()
+            elif ch in ('j', 'J'):  # Vim Down
+                selected = (selected + 1) % len(options)
+                render()
+            elif ch == '\t':  # Tab
+                selected = (selected + 1) % len(options)
+                render()
+            elif ch == '1':
+                return options[0][2]
+            elif ch == '2':
+                return options[1][2]
+            elif ch == '3':
+                return options[2][2]
+            elif ch in ('c', 'C'):
+                return "cmd"
+            elif ch in ('p', 'P'):
+                return "prompt"
+            elif ch == '\x03':  # Ctrl+C
+                return "cancel"
+    finally:
+        termios.tcsetattr(tty_fd, termios.TCSADRAIN, old_settings)
+        try:
+            os.close(tty_fd)
+        except Exception:
+            pass
+
+def main():
+    # Read stdin payload delivered by Antigravity hook
+    try:
+        raw_input_data = sys.stdin.read()
+        payload = json.loads(raw_input_data) if raw_input_data.strip() else {}
+    except Exception:
+        payload = {}
+
+    prompt = (payload.get('lastUserInput') or payload.get('prompt') or '').strip()
+    if not prompt:
+        output_allow()
+
+    match = CMD_REGEX.match(prompt)
+    if not match:
+        output_allow()
+
+    matched_cmd = ((match.group(1) or '') + match.group(2)).strip()
+
+    choice = show_interactive_menu(matched_cmd, prompt)
+    if choice == "prompt":
+        output_allow()
+    elif choice == "cmd":
+        output_terminate(
+            f"Command cancelled. Prefix with '!' to execute in local terminal: !{prompt}"
+        )
+    else:
+        # Cancelled / Escape
+        output_terminate("Prompt cancelled (Esc).")
+
+if __name__ == '__main__':
+    main()

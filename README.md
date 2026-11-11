@@ -36,24 +36,28 @@ Without a guard, this triggers a round-trip to the model, wasting time, tokens, 
 
 1. It inspects the prompt payload (`lastUserInput`).
 2. It detects common local shell commands (with optional `sudo`), such as `git`, `systemctl`, `docker`, `npm`, `apt`, `ls`, etc.
-3. If detected, it interactively asks you:
+3. If detected, it displays an interactive selection menu directly in your terminal:
+   ```text
+   [Antigravity Bash Guard] Detected terminal command: 'git'
+   ? How would you like to handle this input? (↑/↓ arrows, Enter to select, Esc to cancel)
+     ❯ CMD Command    (Cancel prompt & run in shell with '!git status')
+       AI Prompt      (Send to Antigravity as a conversational prompt)
+       Cancel         (Abort and do nothing (Esc))
    ```
-   [Antigravity Bash Guard] Detected command: 'git'
-   Do you mean it as a prompt or as a cmd command?
-     [p] Prompt      (send to Antigravity AI)
-     [c] CMD command (cancel & prepend with '!')
-   Choose [p/C]:
-   ```
-4. If you choose **[p]**, it passes your prompt directly to the AI model.
-5. If you choose **[c]** (or press Enter), it cleanly cancels execution before the model is called and reminds you to use the `!` prefix.
+4. **Interactive Controls**:
+   - **`↑` / `↓` Arrow Keys** (or `k` / `j`): Navigate options
+   - **`Enter`**: Confirm highlighted selection
+   - **`Esc`**: Abort and return to prompt without sending anything to the model
+   - Quick shortcuts: Press `1`, `2`, `3`, `c`, or `p` for instant selection
 
 ```mermaid
 flowchart TD
-    A[User enters prompt] --> B{Starts with local command?}
+    A[User enters prompt] --> B{Starts with terminal command?}
     B -- "No / Prefixed with '!'" --> C["Allow (terminationBehavior: '')"] --> D[Proceed to Model / Shell Execution]
-    B -- "Yes (e.g., 'git status')" --> E["Ask User: Prompt [p] or CMD [c]?"]
-    E -- "[p] Prompt" --> C
-    E -- "[c] CMD command" --> F["Cancel (terminationBehavior: 'terminate')"] --> G["Remind: Prefix with '!'"]
+    B -- "Yes (e.g., 'git status')" --> E["Interactive Menu (↑/↓, Enter, Esc)"]
+    E -- "AI Prompt [2 / p]" --> C
+    E -- "CMD Command [1 / c]" --> F["Cancel (terminationBehavior: 'terminate')"] --> G["Remind: Run '!<cmd>'"]
+    E -- "Cancel [3 / Esc]" --> H["Abort Turn cleanly"]
 ```
 
 ---
