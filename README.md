@@ -34,16 +34,26 @@ Without a guard, this triggers a round-trip to the model, wasting time, tokens, 
 
 **Antigravity Bash Guard** registers a `PreInvocation` lifecycle hook in `~/.gemini/config/hooks.json`. Before any prompt is sent to the LLM:
 
-1. It inspects the prompt payload.
-2. It detects common local shell commands (`ls`, `cd`, `pwd`, `grep`, `find`, `cat`, `npm`, `git`, `python`, `docker`, `agy`).
-3. If detected, it blocks the invocation and reminds you to use the `!` prefix.
-4. If it's a genuine query (or already prefixed with `!`), it allows execution to proceed normally.
+1. It inspects the prompt payload (`lastUserInput`).
+2. It detects common local shell commands (with optional `sudo`), such as `git`, `systemctl`, `docker`, `npm`, `apt`, `ls`, etc.
+3. If detected, it interactively asks you:
+   ```
+   [Antigravity Bash Guard] Detected command: 'git'
+   Do you mean it as a prompt or as a cmd command?
+     [p] Prompt      (send to Antigravity AI)
+     [c] CMD command (cancel & prepend with '!')
+   Choose [p/C]:
+   ```
+4. If you choose **[p]**, it passes your prompt directly to the AI model.
+5. If you choose **[c]** (or press Enter), it cleanly cancels execution before the model is called and reminds you to use the `!` prefix.
 
 ```mermaid
 flowchart TD
     A[User enters prompt] --> B{Starts with local command?}
     B -- "No / Prefixed with '!'" --> C["Allow (terminationBehavior: '')"] --> D[Proceed to Model / Shell Execution]
-    B -- "Yes (e.g., 'git status')" --> E["Block (terminationBehavior: 'terminate')"] --> F["Inject errorMessage: Remind user to use '!'"]
+    B -- "Yes (e.g., 'git status')" --> E["Ask User: Prompt [p] or CMD [c]?"]
+    E -- "[p] Prompt" --> C
+    E -- "[c] CMD command" --> F["Cancel (terminationBehavior: 'terminate')"] --> G["Remind: Prefix with '!'"]
 ```
 
 ---
@@ -95,14 +105,14 @@ The installer deploys `check_command.sh` to `~/.gemini/config/hooks/` and safely
 
 ### Monitored Commands
 
-By default, the hook intercepts prompts starting with:
-`ls`, `cd`, `pwd`, `grep`, `find`, `cat`, `npm`, `git`, `python`, `docker`, `agy`.
+By default, the hook intercepts commands starting with optional `sudo`, including:
+- **Development & Version Control**: `git`, `npm`, `npx`, `pnpm`, `yarn`, `python`, `python3`, `docker`, `docker-compose`, `agy`
+- **System Administration**: `systemctl`, `service`, `journalctl`, `apt`, `apt-get`, `yum`, `dnf`, `pacman`
+- **Filesystem & Utilities**: `ls`, `cd`, `pwd`, `grep`, `find`, `cat`, `mkdir`, `rmdir`, `rm`, `cp`, `mv`, `touch`, `chmod`, `chown`, `tar`, `zip`, `unzip`
+- **Networking & Process**: `curl`, `wget`, `ssh`, `scp`, `rsync`, `ping`, `netstat`, `ss`, `ip`, `ifconfig`, `kill`, `killall`, `ps`, `top`, `htop`, `df`, `du`, `free`
+- **Shell & Editors**: `nano`, `vim`, `vi`, `echo`, `export`, `source`
 
-To customize the list of intercepted commands, edit `~/.gemini/config/hooks/check_command.sh` and update the `CMD_REGEX` variable:
-
-```bash
-CMD_REGEX="^[[:space:]]*(ls|cd|pwd|grep|find|cat|npm|git|python|docker|agy|kubectl|cargo)([[:space:]]|$)"
-```
+To customize the list of intercepted commands, edit `~/.gemini/config/hooks/check_command.sh` and update the `CMD_REGEX` variable.
 
 ---
 

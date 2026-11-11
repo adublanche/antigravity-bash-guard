@@ -33,20 +33,43 @@ else
     fi
 fi
 
-# Regex matching common terminal commands at the start of the prompt:
-# ls, cd, pwd, grep, find, cat, npm, git, python, docker, agy
-# Accounts for optional leading whitespace and ensures the command is a discrete token
-CMD_REGEX="^[[:space:]]*(ls|cd|pwd|grep|find|cat|npm|git|python|docker|agy)([[:space:]]|$)"
+# Regex matching common terminal commands (with optional sudo) at start of prompt
+CMD_REGEX="^[[:space:]]*(sudo[[:space:]]+)?(ls|cd|pwd|grep|find|cat|npm|npx|pnpm|yarn|git|python|python3|docker|docker-compose|agy|systemctl|service|journalctl|apt|apt-get|yum|dnf|pacman|curl|wget|ssh|scp|rsync|ping|netstat|ss|ip|ifconfig|kill|killall|ps|top|htop|df|du|free|chmod|chown|mkdir|rmdir|rm|cp|mv|touch|tar|zip|unzip|nano|vim|vi|echo|export|source)([[:space:]]|$)"
 
 if [[ "$PROMPT" =~ $CMD_REGEX ]]; then
-    MATCHED_CMD="${BASH_REMATCH[1]}"
+    MATCHED_CMD="${BASH_REMATCH[1]}${BASH_REMATCH[2]}"
+    
+    # Check if an interactive TTY is available to ask the user
+    if exec 3< /dev/tty 3> /dev/tty 2>/dev/null; then
+        printf "\n\033[1;33m[Antigravity Bash Guard]\033[0m Detected command: '\033[1m%s\033[0m'\n" "$MATCHED_CMD" >&3
+        printf "Do you mean it as a prompt or as a cmd command?\n" >&3
+        printf "  [p] Prompt      (send to Antigravity AI)\n" >&3
+        printf "  [c] CMD command (cancel & prepend with '!')\n" >&3
+        printf "Choose [p/C]: " >&3
+        
+        CHOICE=""
+        read -r CHOICE <&3 || CHOICE="c"
+        exec 3<&- 3>&-
+        CHOICE=$(echo "$CHOICE" | tr -d '\r' | tr '[:upper:]' '[:lower:]' | xargs)
+        
+        if [[ "$CHOICE" == "p" || "$CHOICE" == "prompt" ]]; then
+            cat << EOF_JSON
+{
+  "terminationBehavior": ""
+}
+EOF_JSON
+            exit 0
+        fi
+    fi
+
+    # If chosen 'c' or non-interactive fallback: block and remind to use '!'
     cat << EOF_JSON
 {
   "terminationBehavior": "terminate",
   "injectSteps": [
     {
       "errorMessage": {
-        "userMessage": "Accidental terminal command detected ('${MATCHED_CMD}'). Antigravity requires shell commands to be prefixed with '!' (e.g., '!${MATCHED_CMD} ...')."
+        "userMessage": "Command cancelled. Prefix with '!' (e.g., '!${PROMPT}') to execute directly in your shell."
       }
     }
   ]
