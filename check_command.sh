@@ -8,7 +8,6 @@ import sys
 import json
 import os
 import re
-import time
 import termios
 import tty
 import select
@@ -41,13 +40,10 @@ def output_terminate(message=None):
     sys.stdout.flush()
     sys.exit(0)
 
-def read_raw_key(tty_fd, timeout_seconds=25.0):
-    """Reads a single keypress or ANSI escape sequence from raw tty with timeout."""
-    r, _, _ = select.select([tty_fd], [], [], timeout_seconds)
-    if not r:
-        return 'TIMEOUT'
-
+def read_raw_key(tty_fd):
+    """Reads a single keypress or ANSI escape sequence from raw tty, waiting indefinitely."""
     try:
+        select.select([tty_fd], [], [])
         b = os.read(tty_fd, 32)
     except Exception:
         return ''
@@ -66,7 +62,7 @@ def read_raw_key(tty_fd, timeout_seconds=25.0):
         if b in (b'\x1b[D', b'\x1bOD'):
             return 'LEFT'
 
-        # If bare escape byte, check briefly for trailing arrow key bytes
+        # If bare escape byte, check briefly for trailing arrow key bytes (WSL IPC buffer)
         if b == b'\x1b':
             r2, _, _ = select.select([tty_fd], [], [], 0.08)
             if r2:
@@ -100,7 +96,7 @@ def read_raw_key(tty_fd, timeout_seconds=25.0):
         return ''
 
 def show_interactive_menu(cmd_name, full_prompt):
-    """Presents an interactive selector on /dev/tty matching CLI style."""
+    """Presents a clean interactive selector on /dev/tty."""
     try:
         tty_fd = os.open('/dev/tty', os.O_RDWR)
     except Exception:
@@ -122,45 +118,28 @@ def show_interactive_menu(cmd_name, full_prompt):
     def tty_write(s):
         os.write(tty_fd, s.encode('utf-8'))
 
-    def render(first=False):
-        if not first:
-            tty_write(f"\033[{len(options)}A")
+    try:
+        tty.setcbreak(tty_fd)
+
+        # Print header
+        tty_write("\n")
+        tty_write(f"\033[1;33m[Antigravity Bash Guard]\033[0m Detected shell command: '\033[1;37m{cmd_name}\033[0m'\n")
+        tty_write("\033[1m? How would you like to handle this input?\033[0m \033[90m(↑/↓ arrows, Enter to select, Esc to cancel)\033[0m\n")
+
+        # Print initial options
         for i, (label, desc, _) in enumerate(options):
-            tty_write("\033[2K\r")
             if i == selected:
                 tty_write(f"  \033[1;36m❯ {label:<14}\033[0m \033[90m({desc})\033[0m\n")
             else:
                 tty_write(f"    {label:<14} \033[90m({desc})\033[0m\n")
 
-    try:
-        tty.setcbreak(tty_fd)
-
-        # Clear current line (wipes out CLI thinking spinner) and hide cursor
-        tty_write("\r\033[2K\033[?25l\n")
-        tty_write(f"\033[1;33m[Antigravity Bash Guard]\033[0m Detected shell command: '\033[1;37m{cmd_name}\033[0m'\n")
-        tty_write("\033[1m? How would you like to handle this input?\033[0m \033[90m(↑/↓ arrows, Enter to select, Esc to cancel)\033[0m\n")
-        render(first=True)
-
-        start_time = time.time()
-        timeout_limit = 25.0
         action = "cancel"
-
         while True:
-            remaining = timeout_limit - (time.time() - start_time)
-            if remaining <= 0:
-                action = "timeout"
-                break
-
-            key = read_raw_key(tty_fd, timeout_seconds=remaining)
-            if key == 'TIMEOUT':
-                action = "timeout"
-                break
-            elif key in ('UP', 'k', 'K'):
+            key = read_raw_key(tty_fd)
+            if key in ('UP', 'k', 'K'):
                 selected = (selected - 1) % len(options)
-                render()
             elif key in ('DOWN', 'j', 'J', 'TAB'):
                 selected = (selected + 1) % len(options)
-                render()
             elif key == 'ENTER':
                 action = options[selected][2]
                 break
@@ -182,23 +161,26 @@ def show_interactive_menu(cmd_name, full_prompt):
             elif key in ('p', 'P'):
                 action = "prompt"
                 break
+            else:
+                continue
 
-        # Clean up menu rendering
-        tty_write(f"\033[{len(options) + 2}A")
-        for _ in range(len(options) + 3):
-            tty_write("\033[2K\n")
-        tty_write(f"\033[{len(options) + 3}A")
+            # Redraw only the option rows
+            tty_write(f"\033[{len(options)}A")
+            for i, (label, desc, _) in enumerate(options):
+                tty_write("\033[2K\r")
+                if i == selected:
+                    tty_write(f"  \033[1;36m❯ {label:<14}\033[0m \033[90m({desc})\033[0m\n")
+                else:
+                    tty_write(f"    {label:<14} \033[90m({desc})\033[0m\n")
 
+        # Print outcome status cleanly
         if action == "cmd":
-            tty_write(f"\033[1;36m[Antigravity Bash Guard]\033[0m Command cancelled. Run with: \033[1;37m!{full_prompt}\033[0m\n")
+            tty_write(f"\033[1;36m[Antigravity Bash Guard]\033[0m Command cancelled. Run with: \033[1;37m!{full_prompt}\033[0m\n\n")
         elif action == "prompt":
-            tty_write("\033[1;32m[Antigravity Bash Guard]\033[0m Proceeding to Antigravity as prompt...\n")
-        elif action == "timeout":
-            tty_write("\033[1;33m[Antigravity Bash Guard]\033[0m Timed out. Command cancelled.\n")
+            tty_write("\033[1;32m[Antigravity Bash Guard]\033[0m Proceeding to Antigravity as prompt...\n\n")
         else:
-            tty_write("\033[90m[Antigravity Bash Guard] Cancelled (Esc).\033[0m\n")
+            tty_write("\033[90m[Antigravity Bash Guard] Cancelled (Esc).\033[0m\n\n")
 
-        tty_write("\033[?25h")
         return action
 
     finally:
@@ -232,12 +214,8 @@ def main():
         output_terminate(
             f"Command cancelled. Prefix with '!' to execute in local terminal: !{prompt}"
         )
-    elif choice == "timeout":
-        output_terminate(
-            f"Timed out waiting for input. Prefix with '!' (e.g., '!{prompt}') to execute directly in your shell."
-        )
     else:
-        # Cancel / Escape: abort silently and cleanly back to prompt
+        # Cancel / Escape: abort cleanly without error block
         output_terminate()
 
 if __name__ == '__main__':
