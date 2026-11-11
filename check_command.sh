@@ -39,13 +39,22 @@ if [[ "$PROMPT" =~ $CMD_REGEX ]]; then
     cat << EOF_JSON
 {
   "allow_tool": false,
-  "deny_reason": "Accidental terminal command detected ('${MATCHED_CMD}'). Antigravity requires shell commands to be prefixed with '!' (e.g., '!${MATCHED_CMD} ...')."
+  "deny_reason": "Accidental terminal command detected ('${MATCHED_CMD}'). Antigravity requires shell commands to be prefixed with '!' (e.g., '!${MATCHED_CMD} ...').",
+  "terminationBehavior": "terminate",
+  "injectSteps": [
+    {
+      "errorMessage": {
+        "userMessage": "Accidental terminal command detected ('${MATCHED_CMD}'). Antigravity requires shell commands to be prefixed with '!' (e.g., '!${MATCHED_CMD} ...')."
+      }
+    }
+  ]
 }
 EOF_JSON
 else
     cat << EOF_JSON
 {
-  "allow_tool": true
+  "allow_tool": true,
+  "terminationBehavior": ""
 }
 EOF_JSON
 fi

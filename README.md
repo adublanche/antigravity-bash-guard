@@ -81,13 +81,15 @@ The installer deploys `check_command.sh` to `~/.gemini/config/hooks/` and safely
 
 ```json
 {
-  "PreInvocation": [
-    {
-      "type": "command",
-      "command": "/home/YOUR_USER/.gemini/config/hooks/check_command.sh",
-      "timeout": 15
-    }
-  ]
+  "bash-guard": {
+    "PreInvocation": [
+      {
+        "type": "command",
+        "command": "/home/YOUR_USER/.gemini/config/hooks/check_command.sh",
+        "timeout": 15
+      }
+    ]
+  }
 }
 ```
 
@@ -120,7 +122,7 @@ To remove Antigravity Bash Guard:
    p = os.path.expanduser('~/.gemini/config/hooks.json')
    if os.path.exists(p):
        with open(p, 'r') as f: d = json.load(f)
-       d['PreInvocation'] = [h for h in d.get('PreInvocation', []) if 'check_command.sh' not in h.get('command', '')]
+       d.pop('bash-guard', None)
        with open(p, 'w') as f: json.dump(d, f, indent=2); f.write('\n')
        print('Hook removed successfully.')
    "

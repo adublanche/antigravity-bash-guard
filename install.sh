@@ -66,9 +66,16 @@ if os.path.exists(hooks_file):
 if not isinstance(data, dict):
     data = {}
 
-# Ensure PreInvocation is an array
-if "PreInvocation" not in data or not isinstance(data["PreInvocation"], list):
-    data["PreInvocation"] = []
+# Clean up invalid top-level PreInvocation array if present from an earlier install
+if "PreInvocation" in data and isinstance(data["PreInvocation"], list):
+    del data["PreInvocation"]
+
+# Ensure named hook dictionary exists
+if "bash-guard" not in data or not isinstance(data["bash-guard"], dict):
+    data["bash-guard"] = {}
+
+if "PreInvocation" not in data["bash-guard"] or not isinstance(data["bash-guard"]["PreInvocation"], list):
+    data["bash-guard"]["PreInvocation"] = []
 
 hook_entry = {
     "type": "command",
@@ -78,21 +85,21 @@ hook_entry = {
 
 # Safely update existing entry or append
 entry_updated = False
-for idx, entry in enumerate(data["PreInvocation"]):
+for idx, entry in enumerate(data["bash-guard"]["PreInvocation"]):
     if isinstance(entry, dict) and entry.get("command") == script_path:
-        data["PreInvocation"][idx] = hook_entry
+        data["bash-guard"]["PreInvocation"][idx] = hook_entry
         entry_updated = True
         break
 
 if not entry_updated:
-    data["PreInvocation"].append(hook_entry)
+    data["bash-guard"]["PreInvocation"].append(hook_entry)
 
 os.makedirs(os.path.dirname(hooks_file), exist_ok=True)
 with open(hooks_file, "w", encoding="utf-8") as f:
     json.dump(data, f, indent=2)
     f.write("\n")
 
-print(f"[✔] Successfully registered PreInvocation hook in {hooks_file}")
+print(f"[✔] Successfully registered named hook 'bash-guard' in {hooks_file}")
 PYEOF
 
 echo "====================================================="
