@@ -39,6 +39,48 @@ def output_terminate(message):
     sys.stdout.flush()
     sys.exit(0)
 
+def read_raw_key(tty_fd):
+    """Reads a single keypress or ANSI escape sequence from raw tty."""
+    try:
+        b = os.read(tty_fd, 32)
+    except Exception:
+        return ''
+
+    if not b:
+        return ''
+
+    # If escape character, wait up to 250ms for trailing bytes (WSL / terminal latency)
+    if b == b'\x1b':
+        r, _, _ = select.select([tty_fd], [], [], 0.25)
+        if r:
+            try:
+                more = os.read(tty_fd, 32)
+                b += more
+            except Exception:
+                pass
+
+    if b in (b'\x1b[A', b'\x1bOA'):
+        return 'UP'
+    if b in (b'\x1b[B', b'\x1bOB'):
+        return 'DOWN'
+    if b in (b'\x1b[C', b'\x1bOC'):
+        return 'RIGHT'
+    if b in (b'\x1b[D', b'\x1bOD'):
+        return 'LEFT'
+    if b in (b'\r', b'\n'):
+        return 'ENTER'
+    if b == b'\x1b':
+        return 'ESC'
+    if b == b'\x03':  # Ctrl+C
+        return 'CTRL_C'
+    if b == b'\t':
+        return 'TAB'
+
+    try:
+        return b.decode('utf-8', errors='ignore')
+    except Exception:
+        return ''
+
 def show_interactive_menu(cmd_name, full_prompt):
     """Presents an interactive selector on /dev/tty matching CLI style."""
     try:
@@ -51,8 +93,6 @@ def show_interactive_menu(cmd_name, full_prompt):
         )
 
     old_settings = termios.tcgetattr(tty_fd)
-    tty_out = os.fdopen(tty_fd, 'w', encoding='utf-8', buffering=1)
-    tty_in = os.fdopen(tty_fd, 'r', encoding='utf-8')
 
     options = [
         ("CMD Command", f"Cancel prompt & run in shell with '!{full_prompt}'", "cmd"),
@@ -61,69 +101,75 @@ def show_interactive_menu(cmd_name, full_prompt):
     ]
     selected = 0
 
+    def tty_write(s):
+        os.write(tty_fd, s.encode('utf-8'))
+
     def render(first=False):
         if not first:
-            tty_out.write(f"\033[{len(options)}A")
+            tty_write(f"\033[{len(options)}A")
         for i, (label, desc, _) in enumerate(options):
-            tty_out.write("\033[2K\r")
+            tty_write("\033[2K\r")
             if i == selected:
-                tty_out.write(f"  \033[1;36m❯ {label:<14}\033[0m \033[90m({desc})\033[0m\n")
+                tty_write(f"  \033[1;36m❯ {label:<14}\033[0m \033[90m({desc})\033[0m\n")
             else:
-                tty_out.write(f"    {label:<14} \033[90m({desc})\033[0m\n")
-        tty_out.flush()
+                tty_write(f"    {label:<14} \033[90m({desc})\033[0m\n")
 
     try:
         tty.setcbreak(tty_fd)
 
-        # Header display
-        tty_out.write("\n\033[1;33m[Antigravity Bash Guard]\033[0m ")
-        tty_out.write(f"Detected terminal command: '\033[1;37m{cmd_name}\033[0m'\n")
-        tty_out.write("\033[1m? How would you like to handle this input?\033[0m \033[90m(↑/↓ arrows, Enter to select, Esc to cancel)\033[0m\n")
+        # Hide cursor and display header
+        tty_write("\033[?25l\n")
+        tty_write(f"\033[1;33m[Antigravity Bash Guard]\033[0m Detected shell command: '\033[1;37m{cmd_name}\033[0m'\n")
+        tty_write("\033[1m? How would you like to handle this input?\033[0m \033[90m(↑/↓ arrows, Enter to select, Esc to cancel)\033[0m\n")
         render(first=True)
 
+        action = "cancel"
         while True:
-            ch = tty_in.read(1)
-            if ch == '\x1b':  # Escape sequence or Esc
-                r, _, _ = select.select([tty_fd], [], [], 0.05)
-                if r:
-                    seq = tty_in.read(2)
-                    if seq in ('[A', 'OA'):  # Up Arrow
-                        selected = (selected - 1) % len(options)
-                        render()
-                    elif seq in ('[B', 'OB'):  # Down Arrow
-                        selected = (selected + 1) % len(options)
-                        render()
-                else:
-                    # Bare Esc key pressed -> cancel
-                    tty_out.write("\033[90m[Cancelled]\033[0m\n")
-                    tty_out.flush()
-                    return "cancel"
-            elif ch in ('\r', '\n'):  # Enter
-                action = options[selected][2]
-                tty_out.write(f"\033[90mSelected: {options[selected][0]}\033[0m\n")
-                tty_out.flush()
-                return action
-            elif ch in ('k', 'K'):  # Vim Up
+            key = read_raw_key(tty_fd)
+            if key in ('UP', 'k', 'K'):
                 selected = (selected - 1) % len(options)
                 render()
-            elif ch in ('j', 'J'):  # Vim Down
+            elif key in ('DOWN', 'j', 'J', 'TAB'):
                 selected = (selected + 1) % len(options)
                 render()
-            elif ch == '\t':  # Tab
-                selected = (selected + 1) % len(options)
-                render()
-            elif ch == '1':
-                return options[0][2]
-            elif ch == '2':
-                return options[1][2]
-            elif ch == '3':
-                return options[2][2]
-            elif ch in ('c', 'C'):
-                return "cmd"
-            elif ch in ('p', 'P'):
-                return "prompt"
-            elif ch == '\x03':  # Ctrl+C
-                return "cancel"
+            elif key == 'ENTER':
+                action = options[selected][2]
+                break
+            elif key in ('ESC', 'CTRL_C', 'q', 'Q'):
+                action = "cancel"
+                break
+            elif key == '1':
+                action = options[0][2]
+                break
+            elif key == '2':
+                action = options[1][2]
+                break
+            elif key == '3':
+                action = options[2][2]
+                break
+            elif key in ('c', 'C'):
+                action = "cmd"
+                break
+            elif key in ('p', 'P'):
+                action = "prompt"
+                break
+
+        # Clean up menu rendering and restore cursor
+        tty_write(f"\033[{len(options)}A")
+        for _ in range(len(options)):
+            tty_write("\033[2K\n")
+        tty_write(f"\033[{len(options)}A")
+
+        if action == "cmd":
+            tty_write(f"\033[1;36m✔\033[0m Cancelled. Run with: \033[1m!{full_prompt}\033[0m\n")
+        elif action == "prompt":
+            tty_write("\033[1;32m✔\033[0m Proceeding to Antigravity as prompt...\n")
+        else:
+            tty_write("\033[90m✔ Cancelled (Esc).\033[0m\n")
+
+        tty_write("\033[?25h")
+        return action
+
     finally:
         termios.tcsetattr(tty_fd, termios.TCSADRAIN, old_settings)
         try:
@@ -132,7 +178,6 @@ def show_interactive_menu(cmd_name, full_prompt):
             pass
 
 def main():
-    # Read stdin payload delivered by Antigravity hook
     try:
         raw_input_data = sys.stdin.read()
         payload = json.loads(raw_input_data) if raw_input_data.strip() else {}
@@ -157,7 +202,6 @@ def main():
             f"Command cancelled. Prefix with '!' to execute in local terminal: !{prompt}"
         )
     else:
-        # Cancelled / Escape
         output_terminate("Prompt cancelled (Esc).")
 
 if __name__ == '__main__':
