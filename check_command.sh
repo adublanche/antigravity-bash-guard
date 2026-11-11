@@ -23,18 +23,19 @@ def output_allow():
     sys.stdout.flush()
     sys.exit(0)
 
-def output_terminate(message):
-    """Halt the invocation and display a notice to the user."""
+def output_terminate(message=None):
+    """Halt the invocation, optionally injecting an error/notice message."""
     result = {
-        "terminationBehavior": "terminate",
-        "injectSteps": [
+        "terminationBehavior": "terminate"
+    }
+    if message:
+        result["injectSteps"] = [
             {
                 "errorMessage": {
                     "userMessage": message
                 }
             }
         ]
-    }
     sys.stdout.write(json.dumps(result) + "\n")
     sys.stdout.flush()
     sys.exit(0)
@@ -49,28 +50,40 @@ def read_raw_key(tty_fd):
     if not b:
         return ''
 
-    # If escape character, wait up to 250ms for trailing bytes (WSL / terminal latency)
-    if b == b'\x1b':
-        r, _, _ = select.select([tty_fd], [], [], 0.25)
-        if r:
-            try:
-                more = os.read(tty_fd, 32)
-                b += more
-            except Exception:
-                pass
+    # Handle Escape and escape sequences
+    if b.startswith(b'\x1b'):
+        if b in (b'\x1b[A', b'\x1bOA'):
+            return 'UP'
+        if b in (b'\x1b[B', b'\x1bOB'):
+            return 'DOWN'
+        if b in (b'\x1b[C', b'\x1bOC'):
+            return 'RIGHT'
+        if b in (b'\x1b[D', b'\x1bOD'):
+            return 'LEFT'
 
-    if b in (b'\x1b[A', b'\x1bOA'):
-        return 'UP'
-    if b in (b'\x1b[B', b'\x1bOB'):
-        return 'DOWN'
-    if b in (b'\x1b[C', b'\x1bOC'):
-        return 'RIGHT'
-    if b in (b'\x1b[D', b'\x1bOD'):
-        return 'LEFT'
+        # If bare escape byte, check briefly for trailing arrow key bytes
+        if b == b'\x1b':
+            r, _, _ = select.select([tty_fd], [], [], 0.08)
+            if r:
+                try:
+                    more = os.read(tty_fd, 32)
+                    b += more
+                    if b in (b'\x1b[A', b'\x1bOA'):
+                        return 'UP'
+                    if b in (b'\x1b[B', b'\x1bOB'):
+                        return 'DOWN'
+                    if b in (b'\x1b[C', b'\x1bOC'):
+                        return 'RIGHT'
+                    if b in (b'\x1b[D', b'\x1bOD'):
+                        return 'LEFT'
+                except Exception:
+                    pass
+
+        # Any non-arrow escape sequence or bare escape registers as ESC
+        return 'ESC'
+
     if b in (b'\r', b'\n'):
         return 'ENTER'
-    if b == b'\x1b':
-        return 'ESC'
     if b == b'\x03':  # Ctrl+C
         return 'CTRL_C'
     if b == b'\t':
@@ -117,8 +130,8 @@ def show_interactive_menu(cmd_name, full_prompt):
     try:
         tty.setcbreak(tty_fd)
 
-        # Hide cursor and display header
-        tty_write("\033[?25l\n")
+        # Clear current line (wipes out CLI thinking spinner) and hide cursor
+        tty_write("\r\033[2K\033[?25l\n")
         tty_write(f"\033[1;33m[Antigravity Bash Guard]\033[0m Detected shell command: '\033[1;37m{cmd_name}\033[0m'\n")
         tty_write("\033[1m? How would you like to handle this input?\033[0m \033[90m(↑/↓ arrows, Enter to select, Esc to cancel)\033[0m\n")
         render(first=True)
@@ -154,18 +167,18 @@ def show_interactive_menu(cmd_name, full_prompt):
                 action = "prompt"
                 break
 
-        # Clean up menu rendering and restore cursor
-        tty_write(f"\033[{len(options)}A")
-        for _ in range(len(options)):
+        # Clean up menu rendering
+        tty_write(f"\033[{len(options) + 2}A")
+        for _ in range(len(options) + 3):
             tty_write("\033[2K\n")
-        tty_write(f"\033[{len(options)}A")
+        tty_write(f"\033[{len(options) + 3}A")
 
         if action == "cmd":
-            tty_write(f"\033[1;36m✔\033[0m Cancelled. Run with: \033[1m!{full_prompt}\033[0m\n")
+            tty_write(f"\033[1;36m[Antigravity Bash Guard]\033[0m Command cancelled. Run with: \033[1;37m!{full_prompt}\033[0m\n")
         elif action == "prompt":
-            tty_write("\033[1;32m✔\033[0m Proceeding to Antigravity as prompt...\n")
+            tty_write("\033[1;32m[Antigravity Bash Guard]\033[0m Proceeding to Antigravity as prompt...\n")
         else:
-            tty_write("\033[90m✔ Cancelled (Esc).\033[0m\n")
+            tty_write("\033[90m[Antigravity Bash Guard] Cancelled (Esc).\033[0m\n")
 
         tty_write("\033[?25h")
         return action
@@ -202,7 +215,8 @@ def main():
             f"Command cancelled. Prefix with '!' to execute in local terminal: !{prompt}"
         )
     else:
-        output_terminate("Prompt cancelled (Esc).")
+        # Cancel / Escape: abort silently and cleanly back to prompt
+        output_terminate()
 
 if __name__ == '__main__':
     main()
