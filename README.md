@@ -30,24 +30,42 @@ Without a guard, this triggers a round-trip to the model, wasting time, tokens, 
 
 ---
 
-## 💡 The Solution
+## 💡 The Solution (Full-Screen Buffer Modal)
 
 **Antigravity Bash Guard** registers a `PreInvocation` lifecycle hook in `~/.gemini/config/hooks.json`. Before any prompt is sent to the LLM:
 
 1. It inspects the prompt payload (`lastUserInput`).
 2. It detects common local shell commands (with optional `sudo`), such as `git`, `systemctl`, `docker`, `npm`, `apt`, `ls`, etc.
-3. If detected, it **instantly stops the invocation** (0ms latency, 0 AI tokens spent) and reminds you to prepend `!`:
+3. If detected, it opens a clean **Full-Screen Alternate Buffer modal** (`\033[?1049h`):
    ```text
-   Accidental terminal command detected ('git'). Antigravity CLI requires shell commands to be prefixed with '!' (e.g. '!git status'). Prompt blocked to avoid wasting AI tokens.
+     🛡️  Antigravity Bash Guard
+     ─────────────────────────────────────────────────────────────
+     Detected shell command: git
+     Full prompt:            git status
+
+     How would you like to handle this input?
+     Use ↑ / ↓ arrow keys (or 1-3), Enter to select, Esc to abort:
+
+     ❯ [1] CMD Command   - Cancel prompt & execute directly in shell (!git status)
+       [2] AI Prompt     - Send to Antigravity as a conversational prompt
+       [3] Cancel (Esc)  - Abort turn cleanly (0 AI tokens spent)
    ```
-4. If it's a normal prompt (or already prefixed with `!`), it passes through immediately without interference.
+4. **Interactive Controls**:
+   - **`↑` / `↓` Arrow Keys** (or `k` / `j`): Navigate options
+   - **`Enter`**: Confirm highlighted selection
+   - **`1` / `2` / `3`**: Quick numerical selection
+   - **`c` / `p`**: Instant select `CMD` or `Prompt`
+   - **`Esc` / `q`**: Abort turn cleanly without sending anything or wasting tokens
+5. Upon exit, the alternate screen buffer is restored byte-for-byte (`\033[?1049l`), leaving the original terminal output completely intact.
 
 ```mermaid
 flowchart TD
     A[User enters prompt] --> B{Starts with terminal command?}
     B -- "No / Prefixed with '!'" --> C["Allow (terminationBehavior: '')"] --> D[Proceed to Model / Shell Execution]
-    B -- "Yes (e.g., 'git status')" --> E["Instant Hard Guard (0ms, 0 tokens)"]
-    E --> F["Block turn & remind: '!<prompt>'"]
+    B -- "Yes (e.g., 'git status')" --> E["Full-Screen Alternate Buffer Modal"]
+    E -- "[2 / p] AI Prompt" --> C
+    E -- "[1 / c] CMD Command" --> F["Cancel (terminationBehavior: 'terminate')"] --> G["Remind: Run '!<cmd>'"]
+    E -- "[3 / Esc] Cancel" --> H["Abort Turn cleanly (0 tokens spent)"]
 ```
 
 ---
