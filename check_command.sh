@@ -8,6 +8,7 @@ import sys
 import json
 import os
 import re
+import time
 import termios
 import tty
 import select
@@ -40,8 +41,12 @@ def output_terminate(message=None):
     sys.stdout.flush()
     sys.exit(0)
 
-def read_raw_key(tty_fd):
-    """Reads a single keypress or ANSI escape sequence from raw tty."""
+def read_raw_key(tty_fd, timeout_seconds=25.0):
+    """Reads a single keypress or ANSI escape sequence from raw tty with timeout."""
+    r, _, _ = select.select([tty_fd], [], [], timeout_seconds)
+    if not r:
+        return 'TIMEOUT'
+
     try:
         b = os.read(tty_fd, 32)
     except Exception:
@@ -63,8 +68,8 @@ def read_raw_key(tty_fd):
 
         # If bare escape byte, check briefly for trailing arrow key bytes
         if b == b'\x1b':
-            r, _, _ = select.select([tty_fd], [], [], 0.08)
-            if r:
+            r2, _, _ = select.select([tty_fd], [], [], 0.08)
+            if r2:
                 try:
                     more = os.read(tty_fd, 32)
                     b += more
@@ -136,10 +141,21 @@ def show_interactive_menu(cmd_name, full_prompt):
         tty_write("\033[1m? How would you like to handle this input?\033[0m \033[90m(↑/↓ arrows, Enter to select, Esc to cancel)\033[0m\n")
         render(first=True)
 
+        start_time = time.time()
+        timeout_limit = 25.0
         action = "cancel"
+
         while True:
-            key = read_raw_key(tty_fd)
-            if key in ('UP', 'k', 'K'):
+            remaining = timeout_limit - (time.time() - start_time)
+            if remaining <= 0:
+                action = "timeout"
+                break
+
+            key = read_raw_key(tty_fd, timeout_seconds=remaining)
+            if key == 'TIMEOUT':
+                action = "timeout"
+                break
+            elif key in ('UP', 'k', 'K'):
                 selected = (selected - 1) % len(options)
                 render()
             elif key in ('DOWN', 'j', 'J', 'TAB'):
@@ -177,6 +193,8 @@ def show_interactive_menu(cmd_name, full_prompt):
             tty_write(f"\033[1;36m[Antigravity Bash Guard]\033[0m Command cancelled. Run with: \033[1;37m!{full_prompt}\033[0m\n")
         elif action == "prompt":
             tty_write("\033[1;32m[Antigravity Bash Guard]\033[0m Proceeding to Antigravity as prompt...\n")
+        elif action == "timeout":
+            tty_write("\033[1;33m[Antigravity Bash Guard]\033[0m Timed out. Command cancelled.\n")
         else:
             tty_write("\033[90m[Antigravity Bash Guard] Cancelled (Esc).\033[0m\n")
 
@@ -213,6 +231,10 @@ def main():
     elif choice == "cmd":
         output_terminate(
             f"Command cancelled. Prefix with '!' to execute in local terminal: !{prompt}"
+        )
+    elif choice == "timeout":
+        output_terminate(
+            f"Timed out waiting for input. Prefix with '!' (e.g., '!{prompt}') to execute directly in your shell."
         )
     else:
         # Cancel / Escape: abort silently and cleanly back to prompt
