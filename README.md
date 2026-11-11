@@ -42,8 +42,8 @@ Without a guard, this triggers a round-trip to the model, wasting time, tokens, 
 ```mermaid
 flowchart TD
     A[User enters prompt] --> B{Starts with local command?}
-    B -- "No / Prefixed with '!'" --> C[allow_tool: true] --> D[Proceed to Model / Shell Execution]
-    B -- "Yes (e.g., 'git status')" --> E[allow_tool: false] --> F[Return deny_reason: Remind user to use '!']
+    B -- "No / Prefixed with '!'" --> C["Allow (terminationBehavior: '')"] --> D[Proceed to Model / Shell Execution]
+    B -- "Yes (e.g., 'git status')" --> E["Block (terminationBehavior: 'terminate')"] --> F["Inject errorMessage: Remind user to use '!'"]
 ```
 
 ---
