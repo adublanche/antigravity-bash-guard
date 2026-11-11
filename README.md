@@ -100,7 +100,7 @@ The installer deploys `check_command.sh` to `~/.gemini/config/hooks/` and safely
       {
         "type": "command",
         "command": "/home/YOUR_USER/.gemini/config/hooks/check_command.sh",
-        "timeout": 86400
+        "timeout": 30
       }
     ]
   }
